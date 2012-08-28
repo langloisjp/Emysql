@@ -100,7 +100,8 @@
 			prepare/2,
 			execute/2, execute/3, execute/4, execute/5,
 			default_timeout/0,
-			modules/0	
+			modules/0,
+			unmonitored_execute/3
 		]).
 
 % for record and constant defines
@@ -468,11 +469,11 @@ execute(PoolId, Query, Args, Timeout) when (is_list(Query) orelse is_binary(Quer
     %-% io:format("~p execute getting connection for pool id ~p~n",[self(), PoolId]),
 	Connection = emysql_conn_mgr:wait_for_connection(PoolId),
     %-% io:format("~p execute got connection for pool id ~p: ~p~n",[self(), PoolId, Connection#emysql_connection.id]),
-	monitor_work(Connection, Timeout, {emysql_conn, execute, [Connection, Query, Args]});
+	monitor_work(Connection, Timeout, {emysql, unmonitored_execute, [Connection, Query, Args]});
 
 execute(PoolId, StmtName, Args, Timeout) when is_atom(StmtName), is_list(Args) andalso is_integer(Timeout) ->
 	Connection = emysql_conn_mgr:wait_for_connection(PoolId),
-	monitor_work(Connection, Timeout, {emysql_conn, execute, [Connection, StmtName, Args]}).
+	monitor_work(Connection, Timeout, {emysql, unmonitored_execute, [Connection, StmtName, Args]}).
 
 %% @spec execute(PoolId, Query|StmtName, Args, Timeout, nonblocking) -> Result | [Result]
 %%		PoolId = atom()
@@ -514,7 +515,7 @@ execute(PoolId, StmtName, Args, Timeout) when is_atom(StmtName), is_list(Args) a
 execute(PoolId, Query, Args, Timeout, nonblocking) when (is_list(Query) orelse is_binary(Query)) andalso is_list(Args) andalso is_integer(Timeout) ->
 	case emysql_conn_mgr:lock_connection(PoolId) of
 		Connection when is_record(Connection, emysql_connection) ->
-			monitor_work(Connection, Timeout, {emysql_conn, execute, [Connection, Query, Args]});
+			monitor_work(Connection, Timeout, {emysql, unmonitored_execute, [Connection, Query, Args]});
 		Other ->
 			Other
 	end;
@@ -522,7 +523,7 @@ execute(PoolId, Query, Args, Timeout, nonblocking) when (is_list(Query) orelse i
 execute(PoolId, StmtName, Args, Timeout, nonblocking) when is_atom(StmtName), is_list(Args) andalso is_integer(Timeout) ->
 	case emysql_conn_mgr:lock_connection(PoolId) of
 		Connection when is_record(Connection, emysql_connection) ->
-			monitor_work(Connection, Timeout, {emysql_conn, execute, [Connection, StmtName, Args]});
+			monitor_work(Connection, Timeout, {emysql, unmonitored_execute, [Connection, StmtName, Args]});
 		Other ->
 			Other
 	end.
@@ -610,3 +611,29 @@ monitor_work(Connection, Timeout, {M,F,A}) when is_record(Connection, emysql_con
 				_ -> exit({mysql_timeout, Timeout, {}})
 			end
 	end.
+
+%% Internal unmonitored execute; prepares statement if needed. 
+%% Should be called through monitor_work.
+unmonitored_execute(Connection, QueryOrStmt, Args) ->
+	case is_atom(QueryOrStmt) of
+		true -> check_statement(Connection, QueryOrStmt);
+		_ -> ok
+	end,
+	emysql_conn:execute(Connection, QueryOrStmt, Args).
+
+%% Make sure emysql prepared statement has been
+%% prepared on this connection.
+check_statement(Connection, StmtName) ->
+	case emysql_statements:fetch(StmtName) of
+		undefined ->
+			exit(statement_has_not_been_prepared);
+		{Version, Statement} ->
+			case emysql_statements:version(Connection#emysql_connection.id, StmtName) of
+				Version ->
+					ok;
+				_ ->
+					ok = emysql_conn:prepare(Connection, StmtName, Statement),
+					emysql_statements:prepare(Connection#emysql_connection.id, StmtName, Version)
+			end
+	end.
+

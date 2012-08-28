@@ -57,7 +57,7 @@ execute(Connection, Query, []) when is_binary(Query) ->
 	emysql_tcp:send_and_recv_packet(Connection#emysql_connection.socket, Packet, 0);
 
 execute(Connection, StmtName, []) when is_atom(StmtName) ->
-	prepare_statement(Connection, StmtName),
+	%%prepare_statement(Connection, StmtName),
 	StmtNameBin = atom_to_binary(StmtName, utf8),
 	Packet = <<?COM_QUERY, "EXECUTE ", StmtNameBin/binary>>,
 	emysql_tcp:send_and_recv_packet(Connection#emysql_connection.socket, Packet, 0);
@@ -78,7 +78,7 @@ execute(Connection, Query, Args) when (is_list(Query) orelse is_binary(Query)) a
 	Ret;
 
 execute(Connection, StmtName, Args) when is_atom(StmtName), is_list(Args) ->
-	prepare_statement(Connection, StmtName),
+	%%prepare_statement(Connection, StmtName),
 	case set_params(Connection, 1, Args, undefined) of
 		OK when is_record(OK, ok_packet) ->
 			ParamNamesBin = list_to_binary(string:join([[$@ | integer_to_list(I)] || I <- lists:seq(1, length(Args))], ", ")),  % todo: utf8?
@@ -240,20 +240,6 @@ set_params(Connection, Num, [Val|Tail], _) ->
 	Packet = <<?COM_QUERY, "SET @", NumBin/binary, "=", ValBin/binary>>,
 	Result = emysql_tcp:send_and_recv_packet(Connection#emysql_connection.socket, Packet, 0),
 	set_params(Connection, Num+1, Tail, Result).
-
-prepare_statement(Connection, StmtName) ->
-	case emysql_statements:fetch(StmtName) of
-		undefined ->
-			exit(statement_has_not_been_prepared);
-		{Version, Statement} ->
-			case emysql_statements:version(Connection#emysql_connection.id, StmtName) of
-				Version ->
-					ok;
-				_ ->
-					ok = prepare(Connection, StmtName, Statement),
-					emysql_statements:prepare(Connection#emysql_connection.id, StmtName, Version)
-			end
-	end.
 
 % human readable string rep of the server state flag
 %% @private
